@@ -39,15 +39,19 @@ setInterval(() => {
   broadcastState();
 }, 1000);
 
-// Socket handling
+/// Socket handling
 io.on('connection', (socket) => {
   socket.emit('state', state);
 
   socket.on('admin', (msg) => {
-    if (msg.key !== ADMIN_KEY) return;
+    if (!msg || msg.key !== ADMIN_KEY) return;
 
     if (msg.type === 'start') {
-      setCountdown(msg.seconds);
+      const secs = Number(msg.seconds) || 0;
+      if (secs > 0) {
+        setCountdown(secs);
+        io.emit('start-sfx');   // 🔊 tell viewers to play playgame.mp3
+      }
     }
 
     if (msg.type === 'stop') {
@@ -61,13 +65,11 @@ io.on('connection', (socket) => {
     }
 
     if (msg.type === 'prank') {
-      // Jump to 1 minute and broadcast prank
       setCountdown(60);
-      io.emit('prank');
+      io.emit('prank');         // 🔊 tell viewers to play laugh.mp3
     }
 
     if (msg.type === 'jumpBack') {
-      // Jump back to 4 minutes (after prank)
       setCountdown(240);
     }
 
@@ -75,6 +77,7 @@ io.on('connection', (socket) => {
   });
 });
 
+// make sure the server actually starts
 server.listen(PORT, () => {
   console.log(`🚀 Saw Timer server running on port ${PORT}`);
 });
