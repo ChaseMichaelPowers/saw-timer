@@ -2,104 +2,61 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Saw Countdown</title>
+  <title>Saw Timer Admin</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    html, body {
-      height: 100%;
-      margin: 0;
-      background: #0b0b0b;
-      color: #d90429;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      font-family: monospace;
-    }
-    #t {
-      font-size: 18vw;
-      font-weight: bold;
-      letter-spacing: 0.05em;
-      text-shadow: 0 0 20px #4a000a;
-      transition: filter .15s ease;
-    }
-
-    @keyframes redFlicker {
-      0%, 100% { filter: none; text-shadow: 0 0 22px #4a000a; }
-      10% { filter: brightness(1.6) contrast(1.3); text-shadow: 0 0 40px #ff0022; }
-      30% { filter: brightness(0.7); }
-      50% { filter: brightness(1.5) contrast(1.5); text-shadow: 0 0 50px #ff0022; }
-      70% { filter: brightness(0.8); }
-      90% { filter: brightness(1.2); }
-    }
-    @keyframes shake {
-      0% { transform: translate(0, 0) }
-      20% { transform: translate(-10px, 0) }
-      40% { transform: translate(8px, 0) }
-      60% { transform: translate(-6px, 0) }
-      80% { transform: translate(4px, 0) }
-      100% { transform: translate(0, 0) }
-    }
-    .prank #t {
-      animation: redFlicker 1.2s ease-in-out, shake 0.35s ease-in-out;
-    }
+    body { background:#111;color:#eee;font-family:system-ui;padding:20px }
+    button { background:#d90429;color:#fff;border:0;padding:10px 16px;margin:6px;border-radius:10px;cursor:pointer }
+    input { padding:8px;font-size:16px;margin-right:8px;width:7rem;text-align:center }
+    #status{margin-top:10px;color:#9be29b}
+    #error{margin-top:10px;color:#ff8a8a}
   </style>
 </head>
 <body>
-  <div id="t">00:00</div>
-  <audio id="laugh" src="/creepy_laugh.mp3" preload="auto"></audio>
+  <h1>⏱ Saw Timer Admin</h1>
+  <div>
+    <label>Minutes: <input id="minutes" type="number" min="0" value="8"></label>
+  </div>
+  <div>
+    <button id="start">Start</button>
+    <button id="stop">Stop</button>
+    <button id="reset">Reset</button>
+    <button id="prank">😈 Prank (→ 1:00)</button>
+    <button id="jumpBack">↩ 4:00</button>
+  </div>
+  <div id="status"></div>
+  <div id="error"></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
-    const t = document.getElementById("t");
-    const laugh = document.getElementById("laugh");
     const socket = io();
+    const keyParam = new URLSearchParams(location.search).get('key');
+    const key = keyParam || prompt("Admin Key:");
+    const minutesEl = document.getElementById('minutes');
+    const statusEl = document.getElementById('status');
+    const errorEl  = document.getElementById('error');
 
-    let running = false, endAtMs = null, offset = 0, startSeconds = 0, audioArmed = false;
-
-    function fmt(s) {
-      const m = Math.floor(s / 60);
-      const r = s % 60;
-      return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`;
+    function send(type, extra={}) {
+      socket.emit('admin', { key, type, ...extra });
     }
+    function ok(msg){ statusEl.textContent = msg; errorEl.textContent=''; }
+    function err(msg){ errorEl.textContent = msg; statusEl.textContent=''; }
 
-    function render() {
-      let left = startSeconds;
-      if (running && endAtMs) {
-        const now = Date.now() + offset;
-        left = Math.max(0, Math.ceil((endAtMs - now) / 1000));
-      }
-      t.textContent = fmt(left);
-      requestAnimationFrame(render);
-    }
+    // Tiny feedback using acks from server (optional; works even without them)
+    socket.on('admin-ack', p => (p.ok ? ok(p.msg) : err(p.msg)));
+    socket.on('connect', ()=> ok('Connected'));
+    socket.on('disconnect', ()=> err('Disconnected'));
 
-    socket.on("state", (s) => {
-      const clientNow = Date.now();
-      offset = s.serverTimeMs - clientNow;
-      running = s.running;
-      startSeconds = s.startSeconds;
-      endAtMs = s.endAtMs;
-    });
-
-    socket.on("prank", async () => {
-      document.body.classList.remove('prank');
-      void document.body.offsetWidth;
-      document.body.classList.add('prank');
-      if (audioArmed) laugh.play().catch(()=>{});
-    });
-
-    addEventListener('click', async ()=>{
-      try { await document.documentElement.requestFullscreen(); } catch(e){}
-      if (!audioArmed) {
-        try {
-          await laugh.play();
-          laugh.pause();
-          laugh.currentTime = 0;
-          audioArmed = true;
-        } catch(e) {}
-      }
-    });
-
-    render();
+    document.getElementById('start').onclick = ()=>{
+      const m = parseInt(minutesEl.value || '0', 10);
+      if (!m) return err('Enter minutes > 0 before Start');
+      send('start', { seconds: m*60 });
+      ok(`Start ${m}:00`);
+    };
+    document.getElementById('stop').onclick    = ()=> { send('stop'); ok('Stopped'); };
+    document.getElementById('reset').onclick   = ()=> { send('reset'); ok('Reset'); };
+    document.getElementById('prank').onclick   = ()=> { send('prank'); ok('Prank fired'); };
+    document.getElementById('jumpBack').onclick= ()=> { send('jumpBack'); ok('Jumped to 4:00'); };
   </script>
 </body>
 </html>
