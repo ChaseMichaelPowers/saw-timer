@@ -8,7 +8,7 @@ const server = http.createServer(app);
 const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
-const ADMIN_KEY = process.env.ADMIN_KEY || 'changeme';
+const ADMIN_KEY = process.env.ADMIN_KEY || 'sawMaster123';
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -19,14 +19,12 @@ let state = {
   serverTimeMs: Date.now()
 };
 
-// Helper: set countdown
 function setCountdown(seconds) {
   state.startSeconds = seconds;
   state.endAtMs = Date.now() + seconds * 1000;
   state.running = true;
 }
 
-// Broadcast state to all clients
 function broadcastState() {
   state.serverTimeMs = Date.now();
   io.emit('state', state);
@@ -39,45 +37,53 @@ setInterval(() => {
   broadcastState();
 }, 1000);
 
-/// Socket handling
+// ---- Sockets ----
 io.on('connection', (socket) => {
   socket.emit('state', state);
 
   socket.on('admin', (msg) => {
-    if (!msg || msg.key !== ADMIN_KEY) return;
+    if (!msg || msg.key !== ADMIN_KEY) {
+      socket.emit('admin-ack', { ok:false, msg:'Invalid admin key' });
+      return;
+    }
 
     if (msg.type === 'start') {
       const secs = Number(msg.seconds) || 0;
       if (secs > 0) {
         setCountdown(secs);
-        io.emit('start-sfx');   // 🔊 tell viewers to play playgame.mp3
+        io.emit('start-sfx');              // tell viewers to play playgame.mp3
+        socket.emit('admin-ack', { ok:true, msg:`Started ${secs}s` });
+        console.log(`[ADMIN] start ${secs}s`);
+      } else {
+        socket.emit('admin-ack', { ok:false, msg:'Enter minutes > 0' });
       }
-    }
-
-    if (msg.type === 'stop') {
+    } else if (msg.type === 'stop') {
       state.running = false;
-    }
-
-    if (msg.type === 'reset') {
+      socket.emit('admin-ack', { ok:true, msg:'Stopped' });
+      console.log('[ADMIN] stop');
+    } else if (msg.type === 'reset') {
       state.running = false;
       state.startSeconds = 0;
       state.endAtMs = null;
-    }
-
-    if (msg.type === 'prank') {
+      socket.emit('admin-ack', { ok:true, msg:'Reset' });
+      console.log('[ADMIN] reset');
+    } else if (msg.type === 'prank') {
       setCountdown(60);
-      io.emit('prank');         // 🔊 tell viewers to play laugh.mp3
-    }
-
-    if (msg.type === 'jumpBack') {
+      io.emit('prank');                    // tell viewers to play laugh.mp3
+      socket.emit('admin-ack', { ok:true, msg:'Prank → 1:00' });
+      console.log('[ADMIN] prank to 1:00');
+    } else if (msg.type === 'jumpBack') {
       setCountdown(240);
+      socket.emit('admin-ack', { ok:true, msg:'Jumped → 4:00' });
+      console.log('[ADMIN] jumpBack to 4:00');
+    } else {
+      socket.emit('admin-ack', { ok:false, msg:'Unknown command' });
     }
 
     broadcastState();
   });
 });
 
-// make sure the server actually starts
 server.listen(PORT, () => {
   console.log(`🚀 Saw Timer server running on port ${PORT}`);
 });
