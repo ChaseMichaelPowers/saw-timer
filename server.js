@@ -16,7 +16,9 @@ let state = {
   running: false,
   startSeconds: 0,
   endAtMs: null,
-  serverTimeMs: Date.now()
+  serverTimeMs: Date.now(),
+  lastStartAtMs: 0,  // NEW: last time "start" was triggered
+  lastPrankAtMs: 0   // NEW: last time "prank" was triggered
 };
 
 function setCountdown(seconds) {
@@ -51,7 +53,8 @@ io.on('connection', (socket) => {
       const secs = Number(msg.seconds) || 0;
       if (secs > 0) {
         setCountdown(secs);
-        io.emit('start-sfx');              // tell viewers to play playgame.mp3
+        state.lastStartAtMs = Date.now(); // NEW
+        io.emit('start-sfx');             // fire-and-forget for live listeners
         socket.emit('admin-ack', { ok:true, msg:`Started ${secs}s` });
         console.log(`[ADMIN] start ${secs}s`);
       } else {
@@ -69,7 +72,8 @@ io.on('connection', (socket) => {
       console.log('[ADMIN] reset');
     } else if (msg.type === 'prank') {
       setCountdown(60);
-      io.emit('prank');                    // tell viewers to play laugh.mp3
+      state.lastPrankAtMs = Date.now();  // NEW
+      io.emit('prank');                   // fire-and-forget for live listeners
       socket.emit('admin-ack', { ok:true, msg:'Prank → 1:00' });
       console.log('[ADMIN] prank to 1:00');
     } else if (msg.type === 'jumpBack') {
@@ -80,7 +84,7 @@ io.on('connection', (socket) => {
       socket.emit('admin-ack', { ok:false, msg:'Unknown command' });
     }
 
-    broadcastState();
+    broadcastState(); // make sure timestamps go out soon
   });
 });
 

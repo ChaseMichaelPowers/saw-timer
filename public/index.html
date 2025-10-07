@@ -22,7 +22,6 @@
     }
     .prank #t { animation: redFlicker 1.2s ease-in-out, shake .35s ease-in-out; }
 
-    /* Banner prompting for audio arm */
     #armBanner {
       position: fixed; left: 50%; transform: translateX(-50%);
       bottom: 20px; background: #1a1a1a; color: #fff; border: 1px solid #333;
@@ -50,8 +49,14 @@
     const socket = io();
 
     let running=false, endAtMs=null, offset=0, startSeconds=0, audioArmed=false;
+
+    // Queue sounds if they arrive before arming
     let pendingStartSfx = false;
     let pendingPrankSfx = false;
+
+    // Track last-seen event timestamps to self-heal if we missed one-shot events
+    let lastSeenStartAtMs = 0;
+    let lastSeenPrankAtMs = 0;
 
     function fmt(s){ const m=Math.floor(s/60), r=s%60; return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`; }
     function render(){
@@ -79,43 +84,72 @@
       } catch(e){ console.warn('startSfx play() error:', e); }
     }
 
+    // Receive authoritative state (with event timestamps)
     socket.on('state', (s)=>{
       const clientNow = Date.now();
       offset = s.serverTimeMs - clientNow;
       running = s.running;
       startSeconds = s.startSeconds;
       endAtMs = s.endAtMs;
+
+      // Self-heal audio if we discover a newer event we haven't handled
+      if (s.lastStartAtMs && s.lastStartAtMs > lastSeenStartAtMs) {
+        console.log('[state] Detected unseen START at', new Date(s.lastStartAtMs).toISOString());
+        if (audioArmed) playStart(); else pendingStartSfx = true;
+        lastSeenStartAtMs = s.lastStartAtMs;
+      }
+      if (s.lastPrankAtMs && s.lastPrankAtMs > lastSeenPrankAtMs) {
+        console.log('[state] Detected unseen PRANK at', new Date(s.lastPrankAtMs).toISOString());
+        // also add visual effect to match missed event
+        document.body.classList.remove('prank'); void document.body.offsetWidth; document.body.classList.add('prank');
+        if (audioArmed) playLaugh(); else pendingPrankSfx = true;
+        lastSeenPrankAtMs = s.lastPrankAtMs;
+      }
     });
 
+    // Live one-shot events (best-effort, immediate)
     socket.on('prank', ()=>{
+      console.log('[socket] prank event');
       document.body.classList.remove('prank'); void document.body.offsetWidth; document.body.classList.add('prank');
-      if (audioArmed) playLaugh();
-      else pendingPrankSfx = true;
+      if (audioArmed) playLaugh(); else pendingPrankSfx = true;
     });
 
     socket.on('start-sfx', ()=>{
-      if (audioArmed) playStart();
-      else pendingStartSfx = true;
+      console.log('[socket] start-sfx event');
+      if (audioArmed) playStart(); else pendingStartSfx = true;
     });
 
-    addEventListener('click', async ()=>{
+    // Arm audio on first interaction (support mouse, touch, and pointer)
+    async function tryArm() {
+      if (audioArmed) return;
       try { await document.documentElement.requestFullscreen(); } catch(e){}
-      if (!audioArmed) {
-        try {
-          await Promise.all([
-            laugh.play().then(()=>{ laugh.pause(); laugh.currentTime=0; }),
-            startSfx.play().then(()=>{ startSfx.pause(); startSfx.currentTime=0; })
-          ]);
-          audioArmed = true;
-          armBanner.classList.add('hidden');
+      try {
+        await Promise.all([
+          laugh.play().then(()=>{ laugh.pause(); laugh.currentTime=0; }),
+          startSfx.play().then(()=>{ startSfx.pause(); startSfx.currentTime=0; })
+        ]);
+        audioArmed = true;
+        armBanner.classList.add('hidden');
+        console.log('[audio] armed');
 
-          if (pendingStartSfx) { playStart(); pendingStartSfx = false; }
-          if (pendingPrankSfx) { playLaugh(); pendingPrankSfx = false; }
-        } catch(e) {
-          console.warn('Audio arming failed:', e);
-        }
+        // Flush queued sounds
+        if (pendingStartSfx) { console.log('[audio] flushing queued start'); playStart(); pendingStartSfx = false; }
+        if (pendingPrankSfx) { console.log('[audio] flushing queued prank'); playLaugh(); pendingPrankSfx = false; }
+      } catch(e) {
+        console.warn('Audio arming failed:', e);
+        // leave banner visible, user may need another tap
       }
-    });
+    }
+
+    // Use multiple event types to maximize success on mobile
+    window.addEventListener('pointerdown', tryArm, { passive:true });
+    window.addEventListener('touchstart', tryArm, { passive:true });
+    window.addEventListener('click', tryArm);
+
+    // Simple self-test hotkeys in console (optional):
+    //   window._testStart() and window._testPrank()
+    window._testStart = ()=> (audioArmed ? playStart() : (pendingStartSfx=true, console.log('queued start (not armed)')));
+    window._testPrank = ()=> (audioArmed ? playLaugh() : (pendingPrankSfx=true, console.log('queued prank (not armed)')));
 
     render();
   </script>
