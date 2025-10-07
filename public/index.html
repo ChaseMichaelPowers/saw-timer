@@ -27,24 +27,42 @@
     }
     .prank #t { animation: redFlicker 1.2s ease-in-out, shake .35s ease-in-out; }
 
-    /* tiny hint to prompt first tap for audio */
-    #hint { position:fixed; bottom:1rem; left:0; right:0; text-align:center; color:#aaa; font:14px system-ui; opacity:.9; }
+    /* Audio gate overlay */
+    #gate {
+      position:fixed; inset:0; background:rgba(0,0,0,.85);
+      display:flex; align-items:center; justify-content:center; flex-direction:column;
+      gap:14px; z-index:10; color:#eee; text-align:center; padding:20px;
+    }
+    #gate button {
+      background:#d90429; color:#fff; border:0; padding:12px 18px; border-radius:12px;
+      font-size:18px; cursor:pointer;
+    }
   </style>
 </head>
 <body>
   <div id="t">00:00</div>
-  <div id="hint">tap to enable sound • tap again for fullscreen</div>
 
-  <!-- audio -->
-  <audio id="laugh"    src="/laugh.mp3"    preload="auto" playsinline></audio>
-  <audio id="playgame" src="/playgame.mp3" preload="auto" playsinline></audio>
+  <!-- audio files -->
+  <audio id="laugh"      src="/laugh.mp3"       preload="auto" playsinline></audio>
+  <audio id="playgame"   src="/playgame.mp3"    preload="auto" playsinline></audio>
+  <audio id="clockstart" src="/clockstart.mp3"  preload="auto" playsinline></audio>
+
+  <!-- tap-to-enable overlay (plays playgame once) -->
+  <div id="gate">
+    <div>tap to enable sound</div>
+    <button id="enableBtn">Enable Audio</button>
+  </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const t = document.getElementById('t');
-    const hint = document.getElementById('hint');
+    const gate = document.getElementById('gate');
+    const enableBtn = document.getElementById('enableBtn');
+
     const laugh = document.getElementById('laugh');
-    const startSfx = document.getElementById('playgame');
+    const playgame = document.getElementById('playgame');
+    const clockstart = document.getElementById('clockstart');
+
     const socket = io();
 
     // ------- timer sync -------
@@ -67,53 +85,54 @@
       endAtMs = s.endAtMs;
     });
 
-    // ------- audio: arm + queue -------
-    let audioArmed=false, pendingPrank=false, pendingStart=false;
+    // ------- audio arm/queue -------
+    let audioArmed = false;
+    let pendingPrank = false;
+    let pendingStart = false;
 
-    async function armAudioAndMaybeFullscreen(){
-      try { await document.documentElement.requestFullscreen(); } catch(e){}
-      if (!audioArmed) {
-        try {
-          await Promise.all([
-            startSfx.play().then(()=>{ startSfx.pause(); startSfx.currentTime=0; }),
-            laugh.play().then(()=>{ laugh.pause(); laugh.currentTime=0; })
-          ]);
-          audioArmed = true;
-          if (hint && hint.parentNode) hint.parentNode.removeChild(hint);
-        } catch(e) {}
-      }
-      if (audioArmed) {
-        if (pendingStart) { pendingStart=false; try { startSfx.play(); } catch(e){} }
-        if (pendingPrank){ pendingPrank=false; try { playLaugh3s(); } catch(e){} }
-      }
-    }
-    ['click','touchstart','pointerdown'].forEach(evt=>{
-      window.addEventListener(evt, armAudioAndMaybeFullscreen, { passive:true });
-    });
-
-    // play laugh but stop after ~3 seconds
+    // Trim laugh to ~3s
     function playLaugh3s(){
       try {
-        laugh.pause();
-        laugh.currentTime = 0;
-        laugh.play();
-        setTimeout(()=>{
-          try { laugh.pause(); laugh.currentTime = 0; } catch(e){}
-        }, 3000);
+        laugh.pause(); laugh.currentTime = 0; laugh.play();
+        setTimeout(()=>{ try { laugh.pause(); laugh.currentTime = 0; } catch(e){} }, 3000);
       } catch(e){}
     }
 
-    // start sound on start
-    socket.on('start-sfx', ()=>{
-      if (audioArmed) { try { startSfx.pause(); startSfx.currentTime=0; startSfx.play(); } catch(e){} }
-      else { pendingStart = true; }
+    // Enable button: prime sounds and PLAY playgame once (audible)
+    enableBtn.addEventListener('click', async ()=>{
+      try { await document.documentElement.requestFullscreen(); } catch(e){}
+      try {
+        // prime the ones we need to auto-play later
+        await Promise.all([
+          clockstart.play().then(()=>{ clockstart.pause(); clockstart.currentTime=0; }),
+          laugh.play().then(()=>{ laugh.pause(); laugh.currentTime=0; })
+        ]);
+      } catch(e){ /* some browsers need multiple taps; the play below will count as gesture anyway */ }
+
+      // play the intro "playgame" now (audible)
+      try { await playgame.play(); } catch(e){}
+
+      audioArmed = true;
+      gate.style.display = 'none';
+
+      // if events arrived before arming, play them now
+      if (pendingStart)  { pendingStart=false; try { clockstart.pause(); clockstart.currentTime=0; clockstart.play(); } catch(e){} }
+      if (pendingPrank)  { pendingPrank=false; playLaugh3s(); }
     });
 
-    // prank sound + flash (laugh trimmed to 3s)
+    // When admin presses Start → play clockstart (NOT playgame)
+    socket.on('start-sfx', ()=>{
+      if (audioArmed) {
+        try { clockstart.pause(); clockstart.currentTime=0; clockstart.play(); } catch(e){}
+      } else {
+        pendingStart = true;
+      }
+    });
+
+    // Prank → flicker + short laugh
     socket.on('prank', ()=>{
       document.body.classList.remove('prank'); void document.body.offsetWidth; document.body.classList.add('prank');
-      if (audioArmed) { playLaugh3s(); }
-      else { pendingPrank = true; }
+      if (audioArmed) { playLaugh3s(); } else { pendingPrank = true; }
     });
 
     render();
