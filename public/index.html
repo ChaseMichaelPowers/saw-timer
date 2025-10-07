@@ -26,29 +26,24 @@
       60%{transform:translate(-6px,0)}80%{transform:translate(4px,0)}100%{transform:translate(0,0)}
     }
     .prank #t { animation: redFlicker 1.2s ease-in-out, shake .35s ease-in-out; }
-
-    /* tiny hint to prompt first tap for audio */
-    #hint { position:fixed; bottom:1rem; left:0; right:0; text-align:center; color:#aaa; font:14px system-ui; opacity:.9; }
   </style>
 </head>
 <body>
   <div id="t">00:00</div>
-  <div id="hint">tap to enable sound • tap again for fullscreen</div>
 
-  <!-- audio -->
   <audio id="laugh"    src="/laugh.mp3"    preload="auto" playsinline></audio>
   <audio id="playgame" src="/playgame.mp3" preload="auto" playsinline></audio>
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const t = document.getElementById('t');
-    const hint = document.getElementById('hint');
     const laugh = document.getElementById('laugh');
     const startSfx = document.getElementById('playgame');
     const socket = io();
 
-    // ------- timer sync -------
     let running=false, endAtMs=null, offset=0, startSeconds=0;
+    let audioArmed=false, pendingPrank=false, pendingStart=false;
+
     function fmt(s){ const m=Math.floor(s/60), r=s%60; return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`; }
     function render(){
       let left=startSeconds;
@@ -59,6 +54,7 @@
       t.textContent = fmt(left);
       requestAnimationFrame(render);
     }
+
     socket.on('state', (s)=>{
       const clientNow = Date.now();
       offset = s.serverTimeMs - clientNow;
@@ -67,31 +63,6 @@
       endAtMs = s.endAtMs;
     });
 
-    // ------- audio: arm + queue -------
-    let audioArmed=false, pendingPrank=false, pendingStart=false;
-
-    async function armAudioAndMaybeFullscreen(){
-      try { await document.documentElement.requestFullscreen(); } catch(e){}
-      if (!audioArmed) {
-        try {
-          await Promise.all([
-            startSfx.play().then(()=>{ startSfx.pause(); startSfx.currentTime=0; }),
-            laugh.play().then(()=>{ laugh.pause(); laugh.currentTime=0; })
-          ]);
-          audioArmed = true;
-          if (hint && hint.parentNode) hint.parentNode.removeChild(hint);
-        } catch(e) {}
-      }
-      if (audioArmed) {
-        if (pendingStart) { pendingStart=false; try { startSfx.play(); } catch(e){} }
-        if (pendingPrank){ pendingPrank=false; try { playLaugh3s(); } catch(e){} }
-      }
-    }
-    ['click','touchstart','pointerdown'].forEach(evt=>{
-      window.addEventListener(evt, armAudioAndMaybeFullscreen, { passive:true });
-    });
-
-    // play laugh but stop after ~3 seconds
     function playLaugh3s(){
       try {
         laugh.pause();
@@ -103,17 +74,29 @@
       } catch(e){}
     }
 
-    // start sound on start
     socket.on('start-sfx', ()=>{
       if (audioArmed) { try { startSfx.pause(); startSfx.currentTime=0; startSfx.play(); } catch(e){} }
       else { pendingStart = true; }
     });
 
-    // prank sound + flash (laugh trimmed to 3s)
     socket.on('prank', ()=>{
       document.body.classList.remove('prank'); void document.body.offsetWidth; document.body.classList.add('prank');
       if (audioArmed) { playLaugh3s(); }
       else { pendingPrank = true; }
+    });
+
+    // Try to auto-arm audio as soon as the page loads (best effort)
+    window.addEventListener('DOMContentLoaded', async ()=>{
+      try {
+        await Promise.all([
+          startSfx.play().then(()=>{ startSfx.pause(); startSfx.currentTime=0; }),
+          laugh.play().then(()=>{ laugh.pause(); laugh.currentTime=0; })
+        ]);
+        audioArmed = true;
+      } catch(e) {
+        // On iOS Safari, this may fail until user taps somewhere (can't be bypassed)
+        console.log('Autoplay failed (likely iOS restriction), will require manual tap');
+      }
     });
 
     render();
