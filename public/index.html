@@ -2,54 +2,169 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Saw Timer Admin</title>
+  <title>Saw Countdown</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { background:#111;color:#eee;font-family:system-ui;padding:20px }
-    button { background:#d90429;color:#fff;border:0;padding:10px 16px;margin:6px;border-radius:10px;cursor:pointer }
-    input { padding:8px;font-size:16px;margin-right:8px;width:7rem;text-align:center }
-    #status{margin-top:10px;color:#9be29b}
-    #error{margin-top:10px;color:#ff8a8a}
+    html, body { height:100%; margin:0; background:#0b0b0b; color:#d90429;
+      display:flex; flex-direction:column; justify-content:center; align-items:center; font-family:monospace; }
+    #t { font-size:18vw; font-weight:bold; letter-spacing:.05em; text-shadow:0 0 20px #4a000a; transition:filter .15s ease; }
+    @keyframes redFlicker {
+      0%,100%{filter:none;text-shadow:0 0 22px #4a000a}
+      10%{filter:brightness(1.6) contrast(1.3);text-shadow:0 0 40px #ff0022}
+      30%{filter:brightness(.7)} 50%{filter:brightness(1.5) contrast(1.5);text-shadow:0 0 50px #ff0022}
+      70%{filter:brightness(.8)} 90%{filter:brightness(1.2)}
+    }
+    @keyframes shake {
+      0%{transform:translate(0,0)}20%{transform:translate(-10px,0)}40%{transform:translate(8px,0)}
+      60%{transform:translate(-6px,0)}80%{transform:translate(4px,0)}100%{transform:translate(0,0)}
+    }
+    .prank #t { animation: redFlicker 1.2s ease-in-out, shake .35s ease-in-out; }
+
+    /* simple keypad — keep or remove if you don’t need it right now */
+    #pad { margin-top: 20px; display:flex; flex-direction:column; align-items:center; gap:10px; }
+    .row { display:flex; gap:10px; }
+    .btn { background:#111; color:#eee; border:1px solid #333; padding:14px 18px; border-radius:10px; font-size:20px; cursor:pointer; }
+    #code { font-size:22px; padding:10px 14px; width:180px; text-align:center; border-radius:10px; border:1px solid #333; background:#0f0f0f; color:#fff }
+    #msg { margin-top:8px; min-height:20px; color:#9be29b; }
+    #warn { margin-top:4px; color:#ff8a8a; min-height:18px; }
+    #claim, #release, #submit { margin: 4px; }
   </style>
 </head>
 <body>
-  <h1>⏱ Saw Timer Admin</h1>
-  <div>
-    <label>Minutes: <input id="minutes" type="number" min="0" value="8"></label>
+  <div id="t">00:00</div>
+
+  <!-- audio -->
+  <audio id="laugh"    src="/laugh.mp3"    preload="auto" playsinline></audio>
+  <audio id="playgame" src="/playgame.mp3" preload="auto" playsinline></audio>
+
+  <!-- optional keypad UI; safe to leave in -->
+  <div id="pad">
+    <div>
+      <button id="claim"  class="btn">Claim Keypad</button>
+      <button id="release" class="btn">Release</button>
+    </div>
+    <input id="code" type="password" inputmode="numeric" placeholder="Enter code" />
+    <div class="row">
+      <button class="btn num">1</button><button class="btn num">2</button><button class="btn num">3</button>
+    </div>
+    <div class="row">
+      <button class="btn num">4</button><button class="btn num">5</button><button class="btn num">6</button>
+    </div>
+    <div class="row">
+      <button class="btn num">7</button><button class="btn num">8</button><button class="btn num">9</button>
+    </div>
+    <div class="row">
+      <button id="clear" class="btn">Clear</button>
+      <button class="btn num">0</button>
+      <button id="submit" class="btn">Submit</button>
+    </div>
+    <div id="msg"></div>
+    <div id="warn"></div>
   </div>
-  <div>
-    <button id="start">Start</button>
-    <button id="stop">Stop</button>
-    <button id="reset">Reset</button>
-    <button id="prank">😈 Prank (→ 1:00)</button>
-    <button id="jumpBack">↩ 4:00</button>
-  </div>
-  <div id="status"></div>
-  <div id="error"></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
+    const t = document.getElementById('t');
+    const laugh = document.getElementById('laugh');
+    const startSfx = document.getElementById('playgame');
     const socket = io();
-    const keyParam = new URLSearchParams(location.search).get('key');
-    const key = keyParam || prompt("Admin Key:");
-    const minutesEl = document.getElementById('minutes');
-    const statusEl = document.getElementById('status');
-    const errorEl  = document.getElementById('error');
-    const send = (type, extra={}) => socket.emit('admin', { key, type, ...extra });
-    const ok=(m)=>{statusEl.textContent=m; errorEl.textContent='';};
-    const err=(m)=>{errorEl.textContent=m; statusEl.textContent='';};
 
-    socket.on('admin-ack', p => (p.ok ? ok(p.msg) : err(p.msg)));
+    // ------- timer sync -------
+    let running=false, endAtMs=null, offset=0, startSeconds=0;
+    function fmt(s){ const m=Math.floor(s/60), r=s%60; return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`; }
+    function render(){
+      let left=startSeconds;
+      if(running && endAtMs){
+        const now = Date.now() + offset;
+        left = Math.max(0, Math.ceil((endAtMs - now)/1000));
+      }
+      t.textContent = fmt(left);
+      requestAnimationFrame(render);
+    }
+    socket.on('state', (s)=>{
+      const clientNow = Date.now();
+      offset = s.serverTimeMs - clientNow;
+      running = s.running; startSeconds = s.startSeconds; endAtMs = s.endAtMs;
+      // combo state (if you kept keypad)
+      codeUsed = !!s.codeUsed;
+      if (s.result === 'win') msgEl.textContent = 'Congratulations!';
+      else if (s.result === 'lose') msgEl.textContent = 'You died.';
+      setUI();
+    });
 
-    document.getElementById('start').onclick = ()=>{
-      const m = parseInt(minutesEl.value || '0', 10);
-      if (!m) return err('Enter minutes > 0 before Start');
-      send('start', { seconds: m*60 }); ok(`Start ${m}:00`);
+    // ------- audio: arm + queue (works on Mac & iPhone) -------
+    let audioArmed=false, pendingPrank=false, pendingStart=false;
+    ['click','touchstart','pointerdown'].forEach(evt=>{
+      window.addEventListener(evt, async ()=>{
+        try { await document.documentElement.requestFullscreen(); } catch(e){}
+        if (!audioArmed) {
+          try {
+            await Promise.all([
+              startSfx.play().then(()=>{ startSfx.pause(); startSfx.currentTime=0; }),
+              laugh.play().then(()=>{ laugh.pause(); laugh.currentTime=0; })
+            ]);
+            audioArmed = true;
+          } catch(e) {}
+        }
+        if (audioArmed) {
+          if (pendingStart) { pendingStart=false; try { startSfx.play(); } catch(e){} }
+          if (pendingPrank){ pendingPrank=false; try { laugh.play(); } catch(e){} }
+        }
+      }, { passive:true });
+    });
+    socket.on('start-sfx', ()=> {
+      if (audioArmed) { try { startSfx.pause(); startSfx.currentTime=0; startSfx.play(); } catch(e){} }
+      else { pendingStart = true; }
+    });
+    socket.on('prank', ()=> {
+      document.body.classList.remove('prank'); void document.body.offsetWidth; document.body.classList.add('prank');
+      if (audioArmed) { try { laugh.pause(); laugh.currentTime=0; laugh.play(); } catch(e){} }
+      else { pendingPrank = true; }
+    });
+
+    // ------- keypad wiring (safe to ignore if not used now) -------
+    const claimBtn = document.getElementById('claim');
+    const releaseBtn = document.getElementById('release');
+    const submitBtn = document.getElementById('submit');
+    const clearBtn  = document.getElementById('clear');
+    const codeEl    = document.getElementById('code');
+    const numBtns   = Array.from(document.querySelectorAll('.num'));
+    const msgEl     = document.getElementById('msg');
+    const warnEl    = document.getElementById('warn');
+    let myId=null, lockOwnerId=null, codeUsed=false;
+
+    function setUI(){
+      const iOwn = myId && lockOwnerId === myId;
+      const locked = !!lockOwnerId;
+      claimBtn.disabled   = locked || codeUsed;
+      releaseBtn.disabled = !iOwn || codeUsed;
+      submitBtn.disabled  = !iOwn || codeUsed;
+      codeEl.disabled     = !iOwn || codeUsed;
+      numBtns.forEach(b=> b.disabled = !iOwn || codeUsed);
+      clearBtn.disabled   = !iOwn || codeUsed;
+      if (codeUsed) warnEl.textContent = 'Code already submitted.';
+      else if (locked && !iOwn) warnEl.textContent = 'Another teammate is entering the code…';
+      else warnEl.textContent = '';
+    }
+    numBtns.forEach(b=> b.onclick = ()=>{ if (!submitBtn.disabled) codeEl.value += b.textContent; });
+    clearBtn.onclick = ()=>{ if (!submitBtn.disabled) codeEl.value=''; };
+    claimBtn.onclick = ()=> socket.emit('claim_lock');
+    releaseBtn.onclick = ()=> socket.emit('release_lock');
+    submitBtn.onclick = ()=> {
+      const code = codeEl.value.trim();
+      if (!code) { msgEl.textContent='Enter a code first'; return; }
+      socket.emit('submit_code',{ code });
     };
-    document.getElementById('stop').onclick    = ()=> { send('stop'); ok('Stopped'); };
-    document.getElementById('reset').onclick   = ()=> { send('reset'); ok('Reset'); };
-    document.getElementById('prank').onclick   = ()=> { send('prank'); ok('Prank fired'); };
-    document.getElementById('jumpBack').onclick= ()=> { send('jumpBack'); ok('Jumped to 4:00'); };
+    socket.on('connect', ()=>{ myId = socket.id; });
+    socket.on('lock_status', ({ ownerId })=>{ lockOwnerId = ownerId || null; setUI(); });
+    socket.on('lock_feedback', p => { msgEl.textContent = p.msg; setUI(); });
+    socket.on('code_ack', p => { msgEl.textContent = p.msg || (p.ok?'Submitted':'Not allowed'); });
+    socket.on('game_result', ({ success, message })=>{
+      msgEl.textContent = message || (success?'Congratulations!':'You died.');
+      codeUsed = true; setUI();
+    });
+
+    render();
   </script>
 </body>
 </html>
