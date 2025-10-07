@@ -17,7 +17,8 @@ let state = {
   startSeconds: 0,
   endAtMs: null,
   serverTimeMs: Date.now(),
-  lastPrankAtMs: 0   // used so late viewers still play the prank sound
+  lastStartAtMs: 0,  // NEW: last time "start" was triggered
+  lastPrankAtMs: 0   // NEW: last time "prank" was triggered
 };
 
 function setCountdown(seconds) {
@@ -38,6 +39,7 @@ setInterval(() => {
   broadcastState();
 }, 1000);
 
+// ---- Sockets ----
 io.on('connection', (socket) => {
   socket.emit('state', state);
 
@@ -47,20 +49,45 @@ io.on('connection', (socket) => {
       return;
     }
 
-    if (msg.type === 'prank') {
-      // Set timer to 1:00 and notify all viewers
+    if (msg.type === 'start') {
+      const secs = Number(msg.seconds) || 0;
+      if (secs > 0) {
+        setCountdown(secs);
+        state.lastStartAtMs = Date.now(); // NEW
+        io.emit('start-sfx');             // fire-and-forget for live listeners
+        socket.emit('admin-ack', { ok:true, msg:`Started ${secs}s` });
+        console.log(`[ADMIN] start ${secs}s`);
+      } else {
+        socket.emit('admin-ack', { ok:false, msg:'Enter minutes > 0' });
+      }
+    } else if (msg.type === 'stop') {
+      state.running = false;
+      socket.emit('admin-ack', { ok:true, msg:'Stopped' });
+      console.log('[ADMIN] stop');
+    } else if (msg.type === 'reset') {
+      state.running = false;
+      state.startSeconds = 0;
+      state.endAtMs = null;
+      socket.emit('admin-ack', { ok:true, msg:'Reset' });
+      console.log('[ADMIN] reset');
+    } else if (msg.type === 'prank') {
       setCountdown(60);
-      state.lastPrankAtMs = Date.now();
-      io.emit('prank'); // <-- VIEWERS will hear the sound
+      state.lastPrankAtMs = Date.now();  // NEW
+      io.emit('prank');                   // fire-and-forget for live listeners
       socket.emit('admin-ack', { ok:true, msg:'Prank → 1:00' });
       console.log('[ADMIN] prank to 1:00');
+    } else if (msg.type === 'jumpBack') {
+      setCountdown(240);
+      socket.emit('admin-ack', { ok:true, msg:'Jumped → 4:00' });
+      console.log('[ADMIN] jumpBack to 4:00');
+    } else {
+      socket.emit('admin-ack', { ok:false, msg:'Unknown command' });
     }
 
-    // (Other commands unchanged… start/stop/reset/jumpBack)
-    broadcastState();
+    broadcastState(); // make sure timestamps go out soon
   });
 });
 
 server.listen(PORT, () => {
-  console.log(`🚀 Saw Timer on ${PORT}`);
+  console.log(`🚀 Saw Timer server running on port ${PORT}`);
 });
