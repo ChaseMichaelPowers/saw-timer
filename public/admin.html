@@ -36,13 +36,10 @@
     const statusEl = document.getElementById('status');
     const errorEl  = document.getElementById('error');
 
-    function send(type, extra={}) {
-      socket.emit('admin', { key, type, ...extra });
-    }
+    function send(type, extra={}) { socket.emit('admin', { key, type, ...extra }); }
     function ok(msg){ statusEl.textContent = msg; errorEl.textContent=''; }
     function err(msg){ errorEl.textContent = msg; statusEl.textContent=''; }
 
-    // Tiny feedback using acks from server (optional; works even without them)
     socket.on('admin-ack', p => (p.ok ? ok(p.msg) : err(p.msg)));
     socket.on('connect', ()=> ok('Connected'));
     socket.on('disconnect', ()=> err('Disconnected'));
