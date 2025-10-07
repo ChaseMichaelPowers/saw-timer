@@ -2,197 +2,54 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Saw Countdown</title>
+  <title>Saw Timer Admin</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    html, body {
-      height:100%; margin:0; background:#0b0b0b; color:#d90429;
-      display:flex; justify-content:center; align-items:center; font-family:monospace;
-    }
-    #t { font-size:18vw; font-weight:bold; letter-spacing:.05em; text-shadow:0 0 20px #4a000a; transition:filter .15s ease; }
-    @keyframes redFlicker {
-      0%,100%{filter:none;text-shadow:0 0 22px #4a000a}
-      10%{filter:brightness(1.6) contrast(1.3);text-shadow:0 0 40px #ff0022}
-      30%{filter:brightness(.7)} 50%{filter:brightness(1.5) contrast(1.5);text-shadow:0 0 50px #ff0022}
-      70%{filter:brightness(.8)} 90%{filter:brightness(1.2)}
-    }
-    @keyframes shake {
-      0%{transform:translate(0,0)}20%{transform:translate(-10px,0)}40%{transform:translate(8px,0)}
-      60%{transform:translate(-6px,0)}80%{transform:translate(4px,0)}100%{transform:translate(0,0)}
-    }
-    .prank #t { animation: redFlicker 1.2s ease-in-out, shake .35s ease-in-out; }
-
-    #armBanner {
-      position: fixed; left: 50%; transform: translateX(-50%);
-      bottom: 20px; background: #1a1a1a; color: #fff; border: 1px solid #333;
-      padding: 10px 14px; border-radius: 9999px; font-size: 14px; opacity: .95;
-      pointer-events: none; transition: opacity .2s ease;
-    }
-    #armBanner.hidden { opacity: 0; }
+    body { background:#111;color:#eee;font-family:system-ui;padding:20px }
+    button { background:#d90429;color:#fff;border:0;padding:10px 16px;margin:6px;border-radius:10px;cursor:pointer }
+    input { padding:8px;font-size:16px;margin-right:8px;width:7rem;text-align:center }
+    #status{margin-top:10px;color:#9be29b}
+    #error{margin-top:10px;color:#ff8a8a}
   </style>
 </head>
 <body>
-  <div id="t">00:00</div>
-  <div id="armBanner">🔊 tap/click to enable audio</div>
-
-  <!-- Fallback media elements (used only if WebAudio decode isn't available) -->
-  <audio id="laugh-fb"    src="/laugh.mp3"    preload="auto" onerror="console.error('Failed to load laugh.mp3')"></audio>
-  <audio id="playgame-fb" src="/playgame.mp3" preload="auto" onerror="console.error('Failed to load playgame.mp3')"></audio>
+  <h1>⏱ Saw Timer Admin</h1>
+  <div>
+    <label>Minutes: <input id="minutes" type="number" min="0" value="8"></label>
+  </div>
+  <div>
+    <button id="start">Start</button>
+    <button id="stop">Stop</button>
+    <button id="reset">Reset</button>
+    <button id="prank">😈 Prank (→ 1:00)</button>
+    <button id="jumpBack">↩ 4:00</button>
+  </div>
+  <div id="status"></div>
+  <div id="error"></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
-    const t = document.getElementById('t');
-    const armBanner = document.getElementById('armBanner');
     const socket = io();
+    const keyParam = new URLSearchParams(location.search).get('key');
+    const key = keyParam || prompt("Admin Key:");
+    const minutesEl = document.getElementById('minutes');
+    const statusEl = document.getElementById('status');
+    const errorEl  = document.getElementById('error');
+    const send = (type, extra={}) => socket.emit('admin', { key, type, ...extra });
+    const ok=(m)=>{statusEl.textContent=m; errorEl.textContent='';};
+    const err=(m)=>{errorEl.textContent=m; statusEl.textContent='';};
 
-    // Timer state
-    let running=false, endAtMs=null, offset=0, startSeconds=0;
+    socket.on('admin-ack', p => (p.ok ? ok(p.msg) : err(p.msg)));
 
-    // Queue sounds if events arrive before arming/decoding
-    let pendingStartSfx = false;
-    let pendingPrankSfx = false;
-
-    // “Missed event” self-heal timestamps
-    let lastSeenStartAtMs = 0;
-    let lastSeenPrankAtMs = 0;
-
-    // Audio (WebAudio primary)
-    let audioArmed = false;
-    let useWebAudio = false;
-    let audioCtx = null;
-    let laughBuf = null;
-    let startBuf = null;
-
-    // HTMLAudio fallback refs
-    const laughFB = document.getElementById('laugh-fb');
-    const startFB = document.getElementById('playgame-fb');
-
-    function fmt(s){ const m=Math.floor(s/60), r=s%60; return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`; }
-    function render(){
-      let left = startSeconds;
-      if (running && endAtMs) {
-        const now = Date.now() + offset;
-        left = Math.max(0, Math.ceil((endAtMs - now)/1000));
-      }
-      t.textContent = fmt(left);
-      requestAnimationFrame(render);
-    }
-
-    function playBuffer(buf){
-      if (!audioCtx || !buf) return;
-      const src = audioCtx.createBufferSource();
-      src.buffer = buf;
-      src.connect(audioCtx.destination);
-      try { src.start(0); } catch(e){ console.warn('buffer start failed', e); }
-    }
-
-    function playLaugh(){
-      if (useWebAudio && laughBuf) playBuffer(laughBuf);
-      else {
-        try {
-          laughFB.pause(); laughFB.currentTime = 0;
-          const p = laughFB.play();
-          if (p && p.catch) p.catch(err => console.warn('laugh (fallback) play() rejected:', err));
-        } catch(e){ console.warn('laugh (fallback) error:', e); }
-      }
-    }
-
-    function playStart(){
-      if (useWebAudio && startBuf) playBuffer(startBuf);
-      else {
-        try {
-          startFB.pause(); startFB.currentTime = 0;
-          const p = startFB.play();
-          if (p && p.catch) p.catch(err => console.warn('start (fallback) play() rejected:', err));
-        } catch(e){ console.warn('start (fallback) error:', e); }
-      }
-    }
-
-    async function fetchAndDecode(url){
-      const res = await fetch(url, { cache: 'force-cache' });
-      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-      const arr = await res.arrayBuffer();
-      return await audioCtx.decodeAudioData(arr);
-    }
-
-    async function armAudio(){
-      if (audioArmed) return;
-
-      // Try to create/unlock WebAudio
-      try {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (audioCtx.state === 'suspended') {
-          await audioCtx.resume();
-        }
-        console.log('[audio] AudioContext state:', audioCtx.state);
-
-        // Preload & decode both mp3s
-        [laughBuf, startBuf] = await Promise.all([
-          fetchAndDecode('/laugh.mp3'),
-          fetchAndDecode('/playgame.mp3')
-        ]);
-        useWebAudio = true;
-        console.log('[audio] decoded via WebAudio');
-      } catch (e) {
-        // WebAudio decode failed — fall back to HTMLAudio
-        console.warn('[audio] WebAudio decode failed; falling back to HTMLAudio', e);
-        useWebAudio = false;
-
-        // prime fallback elements to satisfy autoplay policies
-        try {
-          await Promise.all([
-            laughFB.play().then(()=>{ laughFB.pause(); laughFB.currentTime = 0; }),
-            startFB.play().then(()=>{ startFB.pause(); startFB.currentTime = 0; })
-          ]);
-        } catch (e2) {
-          console.warn('[audio] fallback prime failed (user may need another tap):', e2);
-        }
-      }
-
-      audioArmed = true;
-      armBanner.classList.add('hidden');
-
-      // Flush queued events
-      if (pendingStartSfx) { playStart(); pendingStartSfx = false; }
-      if (pendingPrankSfx) { playLaugh(); pendingPrankSfx = false; }
-    }
-
-    // Arm on first interaction
-    async function tryArm(){ 
-      try { await document.documentElement.requestFullscreen(); } catch(e){}
-      armAudio();
-    }
-    window.addEventListener('pointerdown', tryArm, { passive:true });
-    window.addEventListener('touchstart', tryArm, { passive:true });
-    window.addEventListener('click', tryArm);
-
-    // Socket state (includes event timestamps to self-heal)
-    socket.on('state', (s)=>{
-      const clientNow = Date.now();
-      offset = s.serverTimeMs - clientNow;
-      running = s.running;
-      startSeconds = s.startSeconds;
-      endAtMs = s.endAtMs;
-
-      if (s.lastStartAtMs && s.lastStartAtMs > lastSeenStartAtMs) {
-        if (audioArmed) playStart(); else pendingStartSfx = true;
-        lastSeenStartAtMs = s.lastStartAtMs;
-      }
-      if (s.lastPrankAtMs && s.lastPrankAtMs > lastSeenPrankAtMs) {
-        document.body.classList.remove('prank'); void document.body.offsetWidth; document.body.classList.add('prank');
-        if (audioArmed) playLaugh(); else pendingPrankSfx = true;
-        lastSeenPrankAtMs = s.lastPrankAtMs;
-      }
-    });
-
-    // Live one-shots (best-effort)
-    socket.on('start-sfx', ()=> { if (audioArmed) playStart(); else pendingStartSfx = true; });
-    socket.on('prank', ()=> {
-      document.body.classList.remove('prank'); void document.body.offsetWidth; document.body.classList.add('prank');
-      if (audioArmed) playLaugh(); else pendingPrankSfx = true;
-    });
-
-    render();
+    document.getElementById('start').onclick = ()=>{
+      const m = parseInt(minutesEl.value || '0', 10);
+      if (!m) return err('Enter minutes > 0 before Start');
+      send('start', { seconds: m*60 }); ok(`Start ${m}:00`);
+    };
+    document.getElementById('stop').onclick    = ()=> { send('stop'); ok('Stopped'); };
+    document.getElementById('reset').onclick   = ()=> { send('reset'); ok('Reset'); };
+    document.getElementById('prank').onclick   = ()=> { send('prank'); ok('Prank fired'); };
+    document.getElementById('jumpBack').onclick= ()=> { send('jumpBack'); ok('Jumped to 4:00'); };
   </script>
 </body>
 </html>
