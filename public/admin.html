@@ -1,19 +1,12 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Saw Timer Admin</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body { background:#111;color:#eee;font-family:system-ui;padding:20px }
-    button { background:#d90429;color:#fff;border:0;padding:10px 16px;margin:6px;border-radius:10px;cursor:pointer }
-    input { padding:8px;font-size:16px;margin-right:8px;width:7rem;text-align:center }
-    #status{margin-top:10px;color:#9be29b}
-    #error{margin-top:10px;color:#ff8a8a}
-  </style>
-</head>
 <body>
   <h1>⏱ Saw Timer Admin</h1>
+
+  <div id="live" style="margin:14px 0;">
+    <div style="opacity:.8;font-size:12px;margin-bottom:4px">Live Timer</div>
+    <div id="t" style="font:700 42px/1 monospace;color:#d90429;text-shadow:0 0 10px #4a000a;">00:00</div>
+    <div id="flags" style="font:12px/1.4 system-ui;color:#aaa;margin-top:4px"></div>
+  </div>
+
   <div>
     <label>Minutes: <input id="minutes" type="number" min="0" value="8"></label>
   </div>
@@ -21,7 +14,7 @@
     <button id="start">Start</button>
     <button id="stop">Stop</button>
     <button id="reset">Reset</button>
-    <button id="prank">😈 Prank (→ 1:00)</button>
+    <button id="prank">😈 Prank (no time change)</button>
     <button id="jumpBack">↩ 4:00</button>
   </div>
   <div id="status"></div>
@@ -32,9 +25,12 @@
     const socket = io();
     const keyParam = new URLSearchParams(location.search).get('key');
     const key = keyParam || prompt("Admin Key:");
+
     const minutesEl = document.getElementById('minutes');
-    const statusEl = document.getElementById('status');
-    const errorEl  = document.getElementById('error');
+    const statusEl  = document.getElementById('status');
+    const errorEl   = document.getElementById('error');
+    const tEl       = document.getElementById('t');
+    const flagsEl   = document.getElementById('flags');
 
     function send(type, extra={}) { socket.emit('admin', { key, type, ...extra }); }
     function ok(msg){ statusEl.textContent = msg; errorEl.textContent=''; }
@@ -54,6 +50,36 @@
     document.getElementById('reset').onclick   = ()=> { send('reset'); ok('Reset'); };
     document.getElementById('prank').onclick   = ()=> { send('prank'); ok('Prank fired'); };
     document.getElementById('jumpBack').onclick= ()=> { send('jumpBack'); ok('Jumped to 4:00'); };
+
+    // --- Live timer mirror (same logic as viewer, no audio) ---
+    let running=false, endAtMs=null, offset=0, startSeconds=0, freezeSeconds=null, pranking=false;
+    function fmt(s){ const m=Math.floor(s/60), r=s%60; return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`; }
+    function render(){
+      let left=startSeconds;
+      if (typeof freezeSeconds === 'number' && pranking) {
+        left = freezeSeconds;
+      } else if (running && endAtMs){
+        const now = Date.now() + offset;
+        left = Math.max(0, Math.ceil((endAtMs - now)/1000));
+      }
+      tEl.textContent = fmt(left);
+      requestAnimationFrame(render);
+    }
+    socket.on('state', (s)=>{
+      const clientNow = Date.now();
+      offset = s.serverTimeMs - clientNow;
+      running = s.running;
+      startSeconds = s.startSeconds;
+      endAtMs = s.endAtMs;
+      pranking = !!s.pranking;
+      freezeSeconds = (typeof s.freezeSeconds === 'number') ? s.freezeSeconds : null;
+
+      flagsEl.textContent = [
+        running ? 'running' : 'stopped',
+        pranking ? '• PRANK MINUTE (frozen at 03:00)' : ''
+      ].filter(Boolean).join('  ');
+    });
+
+    render();
   </script>
 </body>
-</html>

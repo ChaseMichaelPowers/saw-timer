@@ -1,141 +1,84 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Saw Countdown</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    html, body {
-      height:100%; margin:0; background:#0b0b0b; color:#d90429;
-      display:flex; justify-content:center; align-items:center; font-family:monospace; flex-direction:column;
-    }
-    #t {
-      font-size:18vw; font-weight:bold; letter-spacing:.05em;
-      text-shadow:0 0 20px #4a000a; transition:filter .15s ease;
-    }
-    @keyframes redFlicker {
-      0%,100%{filter:none;text-shadow:0 0 22px #4a000a}
-      10%{filter:brightness(1.6) contrast(1.3);text-shadow:0 0 40px #ff0022}
-      30%{filter:brightness(.7)}
-      50%{filter:brightness(1.5) contrast(1.5);text-shadow:0 0 50px #ff0022}
-      70%{filter:brightness(.8)}
-      90%{filter:brightness(1.2)}
-    }
-    @keyframes shake {
-      0%{transform:translate(0,0)}20%{transform:translate(-10px,0)}40%{transform:translate(8px,0)}
-      60%{transform:translate(-6px,0)}80%{transform:translate(4px,0)}100%{transform:translate(0,0)}
-    }
-    .prank #t { animation: redFlicker 1.2s ease-in-out, shake .35s ease-in-out; }
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const t = document.getElementById('t');
+  const gate = document.getElementById('gate');
+  const enableBtn = document.getElementById('enableBtn');
 
-    /* Audio gate overlay */
-    #gate {
-      position:fixed; inset:0; background:rgba(0,0,0,.85);
-      display:flex; align-items:center; justify-content:center; flex-direction:column;
-      gap:14px; z-index:10; color:#eee; text-align:center; padding:20px;
-    }
-    #gate button {
-      background:#d90429; color:#fff; border:0; padding:12px 18px; border-radius:12px;
-      font-size:18px; cursor:pointer;
-    }
-  </style>
-</head>
-<body>
-  <div id="t">00:00</div>
+  const laugh = document.getElementById('laugh');
+  const playgame = document.getElementById('playgame');
+  const clockstart = document.getElementById('clockstart');
 
-  <!-- audio files -->
-  <audio id="laugh"      src="/laugh.mp3"       preload="auto" playsinline></audio>
-  <audio id="playgame"   src="/playgame.mp3"    preload="auto" playsinline></audio>
-  <audio id="clockstart" src="/clockstart.mp3"  preload="auto" playsinline></audio>
+  const socket = io();
 
-  <!-- tap-to-enable overlay (plays playgame once) -->
-  <div id="gate">
-    <div>tap to enable sound</div>
-    <button id="enableBtn">Enable Audio</button>
-  </div>
+  // ------- timer sync -------
+  let running=false, endAtMs=null, offset=0, startSeconds=0, freezeSeconds=null, pranking=false;
+  function fmt(s){ const m=Math.floor(s/60), r=s%60; return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`; }
+  function render(){
+    let left=startSeconds;
 
-  <script src="/socket.io/socket.io.js"></script>
-  <script>
-    const t = document.getElementById('t');
-    const gate = document.getElementById('gate');
-    const enableBtn = document.getElementById('enableBtn');
-
-    const laugh = document.getElementById('laugh');
-    const playgame = document.getElementById('playgame');
-    const clockstart = document.getElementById('clockstart');
-
-    const socket = io();
-
-    // ------- timer sync -------
-    let running=false, endAtMs=null, offset=0, startSeconds=0;
-    function fmt(s){ const m=Math.floor(s/60), r=s%60; return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`; }
-    function render(){
-      let left=startSeconds;
-      if(running && endAtMs){
-        const now = Date.now() + offset;
-        left = Math.max(0, Math.ceil((endAtMs - now)/1000));
-      }
-      t.textContent = fmt(left);
-      requestAnimationFrame(render);
-    }
-    socket.on('state', (s)=>{
-      const clientNow = Date.now();
-      offset = s.serverTimeMs - clientNow;
-      running = s.running;
-      startSeconds = s.startSeconds;
-      endAtMs = s.endAtMs;
-    });
-
-    // ------- audio arm/queue -------
-    let audioArmed = false;
-    let pendingPrank = false;
-    let pendingStart = false;
-
-    // Trim laugh to ~3s
-    function playLaugh3s(){
-      try {
-        laugh.pause(); laugh.currentTime = 0; laugh.play();
-        setTimeout(()=>{ try { laugh.pause(); laugh.currentTime = 0; } catch(e){} }, 3000);
-      } catch(e){}
+    if (typeof freezeSeconds === 'number' && pranking) {
+      // frozen display during prank minute
+      left = freezeSeconds;
+    } else if (running && endAtMs){
+      const now = Date.now() + offset;
+      left = Math.max(0, Math.ceil((endAtMs - now)/1000));
     }
 
-    // Enable button: prime sounds and PLAY playgame once (audible)
-    enableBtn.addEventListener('click', async ()=>{
-      try { await document.documentElement.requestFullscreen(); } catch(e){}
-      try {
-        // prime the ones we need to auto-play later
-        await Promise.all([
-          clockstart.play().then(()=>{ clockstart.pause(); clockstart.currentTime=0; }),
-          laugh.play().then(()=>{ laugh.pause(); laugh.currentTime=0; })
-        ]);
-      } catch(e){ /* some browsers need multiple taps; the play below will count as gesture anyway */ }
+    t.textContent = fmt(left);
+    requestAnimationFrame(render);
+  }
+  socket.on('state', (s)=>{
+    const clientNow = Date.now();
+    offset = s.serverTimeMs - clientNow;
+    running = s.running;
+    startSeconds = s.startSeconds;
+    endAtMs = s.endAtMs;
+    pranking = !!s.pranking;
+    freezeSeconds = (typeof s.freezeSeconds === 'number') ? s.freezeSeconds : null;
+  });
 
-      // play the intro "playgame" now (audible)
-      try { await playgame.play(); } catch(e){}
+  // ------- audio arm/queue -------
+  let audioArmed = false;
+  let pendingPrank = false;
+  let pendingStart = false;
 
-      audioArmed = true;
-      gate.style.display = 'none';
+  function playLaugh3s(){
+    try {
+      laugh.pause(); laugh.currentTime = 0; laugh.play();
+      setTimeout(()=>{ try { laugh.pause(); laugh.currentTime = 0; } catch(e){} }, 3000);
+    } catch(e){}
+  }
 
-      // if events arrived before arming, play them now
-      if (pendingStart)  { pendingStart=false; try { clockstart.pause(); clockstart.currentTime=0; clockstart.play(); } catch(e){} }
-      if (pendingPrank)  { pendingPrank=false; playLaugh3s(); }
-    });
+  enableBtn.addEventListener('click', async ()=>{
+    try { await document.documentElement.requestFullscreen(); } catch(e){}
+    try {
+      await Promise.all([
+        clockstart.play().then(()=>{ clockstart.pause(); clockstart.currentTime=0; }),
+        laugh.play().then(()=>{ laugh.pause(); laugh.currentTime=0; })
+      ]);
+    } catch(e){}
 
-    // When admin presses Start → play clockstart (NOT playgame)
-    socket.on('start-sfx', ()=>{
-      if (audioArmed) {
-        try { clockstart.pause(); clockstart.currentTime=0; clockstart.play(); } catch(e){}
-      } else {
-        pendingStart = true;
-      }
-    });
+    try { await playgame.play(); } catch(e){}
 
-    // Prank → flicker + short laugh
-    socket.on('prank', ()=>{
-      document.body.classList.remove('prank'); void document.body.offsetWidth; document.body.classList.add('prank');
-      if (audioArmed) { playLaugh3s(); } else { pendingPrank = true; }
-    });
+    audioArmed = true;
+    gate.style.display = 'none';
 
-    render();
-  </script>
-</body>
-</html>
+    if (pendingStart)  { pendingStart=false; try { clockstart.pause(); clockstart.currentTime=0; clockstart.play(); } catch(e){} }
+    if (pendingPrank)  { pendingPrank=false; playLaugh3s(); }
+  });
+
+  socket.on('start-sfx', ()=>{
+    if (audioArmed) {
+      try { clockstart.pause(); clockstart.currentTime=0; clockstart.play(); } catch(e){}
+    } else {
+      pendingStart = true;
+    }
+  });
+
+  socket.on('prank', ()=>{
+    document.body.classList.remove('prank'); void document.body.offsetWidth; document.body.classList.add('prank');
+    if (audioArmed) { playLaugh3s(); } else { pendingPrank = true; }
+  });
+
+  render();
+</script>
